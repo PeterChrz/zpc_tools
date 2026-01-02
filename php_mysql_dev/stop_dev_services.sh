@@ -8,6 +8,9 @@ NC='\033[0m' # No Color
 
 echo -e "${RED}=== Stopping Development Services ===${NC}"
 
+echo -e "${YELLOW}→${NC} Stopping Nginx..."
+sudo rc-service nginx stop
+
 echo -e "${YELLOW}→${NC} Stopping PHP-FPM..."
 sudo rc-service php-fpm stop
 
