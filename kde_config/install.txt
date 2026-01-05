@@ -1,0 +1,6 @@
+  # Copy to target system and extract:
+  tar -xzf kde-panel-config.tar.gz -C ~/
+
+  # Restart Plasma to apply:
+  kquitapp5 plasmashell && kstart5 plasmashell
+  # OR use: plasmashell --replace &
