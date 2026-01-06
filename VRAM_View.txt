@@ -1,0 +1,360 @@
+Monitor iGPU
+
+watch -n 0.5 'echo "VRAM Used: $(($(sudo cat /sys/class/drm/card1/device/mem_info_vram_used) / 1024 / 1024)) MB" && echo "VRAM Total: $(($(sudo cat /sys/class/drm/card1/device/mem_info_vram_total) / 1024 / 1024)) MB"'
+
+
+watch -n 0.5 'echo "=== VRAM (Dedicated) ===" && echo "Used: $(($(sudo cat /sys/class/drm/card1/device/mem_info_vram_used) / 1024 / 1024)) MB / $(($(sudo cat /sys/class/drm/card1/device/mem_info_vram_total) / 1024 / 1024)) MB" && echo "" && echo "=== GTT (System RAM) ===" && echo "Used: $(($(sudo cat /sys/class/drm/card1/device/mem_info_gtt_used) / 1024 / 1024)) MB / $(($(sudo cat /sys/class/drm/card1/device/mem_info_gtt_total) / 1024 / 1024)) MB"'
+
+sudo radeontop
+
+
+glxgears
+vkcube
+http://webglsamples.org/aquarium/aquarium.html
+
+Checking for GPU errors on boot:
+sudo dmesg | grep -E -i "gpu|drm|vga|error"
+
+versionz
+sudo dmesg | grep -i "amdgpu.*firmware\|dmub firmware"
+
+
+Check GTT Growth:
+watch -n 0.5 'echo "GTT Used: $(($(sudo cat /sys/class/drm/card1/device/mem_info_gtt_used) / 1024 / 1024)) MB / $(($(sudo cat /sys/class/drm/card1/device/mem_info_gtt_total) / 1024 / 1024)) MB"'
+
+How Strix Halo VRAM Works
+The 512MB VRAM you see is the dedicated carved-out portion from your system RAM that's reserved at boot. This is what shows as "VRAM" and doesn't dynamically grow.
+The GTT (15694MB) is where the dynamic allocation happens - this is your system RAM that the GPU can access on-demand. When you run demanding workloads, the GPU will use GTT for additional memory needs beyond the 512MB VRAM.
+To see real dynamic allocation in action, you need a workload that actually needs more than 512MB of GPU memory. Basic tasks like glxgears and vkcube are very lightweight and won't push past that threshold.
+
+---
+
+ Option A: More Aggressive AMD Parameter
+
+  Change the kernel parameter to:
+  GRUB_CMDLINE_LINUX_DEFAULT='quiet amdgpu.dc=0'
+  ⚠️ This disables AMD Display Core and may reduce some display features, but often fixes suspend issues.
+
+    Option C: Update Your BIOS/Firmware
+
+  Check your laptop manufacturer's website for BIOS updates. AMD Ryzen AI 300 series is very new, and firmware updates often fix suspend/resume bugs.
+
+  Option D: Try a Different Kernel
+
+  Some users report better results with the linux-zen kernel:
+  sudo pacman -S linux-zen linux-zen-headers
+  Then select it from GRUB at boot.
+
+  My Recommendation:
+
+  Try this order:
+
+  1. ✅ First: Add kernel parameters (amdgpu.sg_display=0 or amdgpu.dc=0) to your current kernel
+  2. ⏸️ Second: Update to latest mainline kernel if you're not already on 6.16+
+  3. ⏸️ Third: Update BIOS/firmware for your laptop
+  4. ⏸️ Last resort: Try linux-zen only if nothing else works
+
+  The kernel parameter fix is the most targeted solution for AMD GPU suspend issues and doesn't risk introducing new problems.
+  \
+  Since I can't run sudo commands interactively, here are the exact steps you should run:
+
+    # 1. Backup the original
+    sudo cp /etc/default/grub /etc/default/grub.backup
+
+    # 2. Edit the file
+    sudo nano /etc/default/grub
+
+    # 3. Change this line:
+    #    GRUB_CMDLINE_LINUX_DEFAULT='quiet amdgpu.sg_display=0'
+    # To:
+    #    GRUB_CMDLINE_LINUX_DEFAULT='quiet amdgpu.sg_display=0 pstore.backend=efi'
+
+    # 4. Save and exit (Ctrl+O, Enter, Ctrl+X)
+
+    # 5. Update GRUB
+    sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+    # 6. Reboot
+    sudo reboot
+
+    After reboot, verify it worked:
+
+    cat /sys/module/pstore/parameters/backend
+    # Should output: efi
+
+    cat /proc/cmdline
+    # Should see: pstore.backend=efi in the list
+
+    sudo ls /sys/fs/pstore/
+    # Should be accessible now
+
+    If you want, while you're editing, you could also add the hung task panic settings I mentioned on the same line:
+
+    GRUB_CMDLINE_LINUX_DEFAULT='quiet amdgpu.sg_display=0 pstore.backend=efi'
+
+    ---
+
+     Option 1: Soft Block via rfkill (Safest, Reversible)
+
+  # Disable hci0 only
+  sudo rfkill block 0
+
+  # Verify
+  rfkill list
+
+  # To re-enable later
+  sudo rfkill unblock 0
+
+  Option 2: Blacklist the Bluetooth Driver (Permanent, but WiFi still works)
+
+  The MT7925 uses separate drivers for WiFi and Bluetooth:
+  - WiFi: mt7925e (PCIe)
+  - Bluetooth: btusb or btmtk (USB)
+
+  # Check which module is handling the MT7925 Bluetooth
+  lsmod | grep -E "btusb|btmtk"
+
+  # Create blacklist file
+  sudo nano /etc/modprobe.d/blacklist-mt7925-bluetooth.conf
+
+  # Add this line (we'll confirm which one after checking lsmod above):
+  blacklist btmtk
+
+  # Then rebuild initramfs
+  sudo mkinitcpio -P
+
+  # Reboot
+
+  Important: This won't affect WiFi because the WiFi uses a different driver (mt7925e for PCIe).
+
+  Option 3: Unbind the USB Device (Until next reboot)
+
+  # Unbind the MT7925 Bluetooth USB device
+  echo "0e8d:8c38" | sudo tee /sys/bus/usb/drivers/btusb/unbind
+
+  # To rebind later
+  echo "0e8d:8c38" | sudo tee /sys/bus/usb/drivers/btusb/bind
+
+  Let me check which Bluetooth modules you have loaded:
+
+
+  Best Solution: Use rfkill to Block Only hci0
+
+    This is the cleanest approach:
+
+    # Disable just the MT7925 Bluetooth (hci0)
+    sudo rfkill block 0
+
+    # Verify - hci0 should show "Soft blocked: yes"
+    rfkill list
+
+    # Make it permanent across reboots
+    echo "rfkill block 0" | sudo tee -a /etc/rc.local
+    # Or if using OpenRC services, create a local service
+
+    To make it permanent with OpenRC:
+
+    # Create a simple init script
+    sudo nano /etc/local.d/disable-mt7925-bt.start
+
+    # Add this line:
+    #!/bin/sh
+    rfkill block 0
+
+    # Make it executable
+    sudo chmod +x /etc/local.d/disable-mt7925-bt.start
+
+    Alternative: Disable via udev Rule (More Targeted)
+
+    This unbinds only the MT7925 Bluetooth device automatically:
+
+    # Create udev rule
+    sudo nano /etc/udev/rules.d/99-disable-mt7925-bluetooth.rules
+
+    # Add this line:
+    ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="0e8d", ATTRS{idProduct}=="8c38", ATTR{authorized}="0"
+
+    # Reload udev
+    sudo udevadm control --reload-rules
+
+    My Recommendation
+
+    Start with rfkill - it's simple, reversible, and won't mess with anything else:
+
+    sudo rfkill block 0
+
+    If that works well and your TP-Link adapter keeps working, make it permanent with the OpenRC local.d script.
+
+    This Confirms Your Root Cause!
+
+    The fact that both WiFi AND Bluetooth from the MT7925 are problematic strongly suggests the MT7925 chip/driver is your lockup culprit. The chip is:
+    - Very new hardware
+    - Known to have driver issues
+    - Causing problems on multiple distros (you mentioned Fedora too)
+
+    Would you like me to help you check for kernel updates or alternative drivers for the MT7925?
+
+
+    ---
+
+    Option 4: Compile Kernel 6.19 RC Yourself (Advanced)
+
+    Not recommended for production, but possible:
+
+    # Download from kernel.org
+    wget https://git.kernel.org/torvalds/t/linux-6.19-rc2.tar.gz
+    # Compile and install (risky, time-consuming)
+
+    ---
+
+
+    Option 2: Use the gpu_burn tool from this repository
+
+    This is a proper stress test tool (similar to the original CUDA gpu-burn), but it requires ROCm to be installed. You currently don't have ROCm/hipcc installed.
+
+    To use it, you would need to:
+    1. Install ROCm: sudo pacman -S rocm-hip-sdk (or equivalent for your distro)
+    2. Build: make
+    3. Run: ./gpu_burn 3600 (for a 1-hour test)
+
+    Which approach would you prefer?
+
+    ---
+
+
+    Create /etc/modprobe.d/ramoops.conf:
+    options ramoops mem_size=1048576 record_size=262144 console_size=262144 ecc=1
+
+    And change kernel cmdline to just: pstore.backend=ramoops
+
+    Parameters explained:
+    - mem_size=1048576 - 1MB total reserved for crash logs
+    - record_size=262144 - 256KB per crash dump (allows 4 dumps)
+    - console_size=262144 - 256KB for console log
+    - ecc=1 - Error correction for memory corruption
+
+    After reboot, you should see crash dumps appear in /sys/fs/pstore/ after the next panic.
+
+    About your GPU/VRAM issue
+
+    The 137% VRAM is definitely suspicious with your HX375 iGPU. The dynamic RAM allocation might be failing. Want me to help investigate the AMDGPU driver settings? That amdgpu.sg_display=0 parameter in your cmdline is already disabling scatter-gather for display, which suggests you might have already been troubleshooting GPU issues.
+
+    GRUB_DISTRIBUTOR='Artix'
+    GRUB_CMDLINE_LINUX_DEFAULT='quiet amdgpu.sg_display=0 pstore.backend=ramoops'
+    GRUB_CMDLINE_LINUX="net.ifnames=0"
+
+    Then regenerate GRUB config:
+      sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+      ---
+
+Update kernel parameter for:
+iommu=pt
+
+1. NVMe parameter - Fixes the #1 reported cause of suspend hangs on AMD Ryzen AI 300 series
+2. iommu=pt - Fixes IOMMU-related suspend/resume issues AND may help with the GPU memory management problems you're seeing
+
+The GPU "VM memory stats" error could be related to IOMMU translation issues during cleanup. Passthrough mode might resolve this.
+
+
+      1. AMD GPU Memory Management Issue (New Discovery)
+
+      Found in /var/log/system_monitor/monitor_20260104_090514.log:
+      amdgpu 0000:c3:00.0: amdgpu: VM memory stats for proc firefox(3288) task firefox:cs0(2972) is non-zero when fini
+      This error appeared right before a shutdown/crash. It indicates the AMD GPU driver is having trouble cleaning up video memory for Firefox.
+
+      2. VRAM Usage Consistently at 137.66%
+
+      Your GPU VRAM is showing 137.66% usage across all monitor snapshots. This is abnormal and suggests either:
+      - A GPU memory leak
+      - GPU memory management bug in the amdgpu driver
+      - Incorrect VRAM reporting (less likely given the VM memory error above)
+
+      3. NVMe Power State Configuration
+
+      Current setting: 100000 (100ms)
+      - This is known to cause suspend/resume failures on AMD Ryzen AI 300 series
+      - Your investigation summary identifies this as Priority 1 fix
+
+        The evidence points to multiple interacting issues:
+
+  1. Primary suspect: NVMe APST (Autonomous Power State Transition) causing suspend hangs
+  2. Secondary suspect: AMD GPU (Radeon 890M) memory management bug, especially during suspend/idle transitions
+  3. Contributing factor: Brand new CPU (Ryzen AI 9 HX 375) with immature kernel support in 6.17.9
+
+
+  ---
+
+  Once you reboot, verify the parameters took effect:
+
+  # Check kernel parameters
+  cat /proc/cmdline
+
+  # Check NVMe power state
+  cat /sys/module/nvme_core/parameters/default_ps_max_latency_us
+
+  # Check IOMMU mode
+  dmesg | grep -i iommu
+
+  # Check if ramoops is working
+  ls -la /sys/fs/pstore/
+
+  If crashes still occur:
+  - We'll have better crash dumps in pstore (ramoops)
+  - Next step would be kernel update or more aggressive GPU parameters
+  - The VRAM 137% issue may still need addressing
+
+
+  saberwolf:[pch]:~/git/failed_suspend$ sudo dmesg | grep -E "ACPI.*GP23|amdgpu.*error|amdgpu.*failed"
+  [    0.224482] ACPI BIOS Error (bug): Failure creating named object [\_SB.PCI0.GP23._S0W], AE_ALREADY_EXISTS (20250404/dswload2-326)
+  [    0.224485] ACPI BIOS Error (bug): Failure creating named object [\_SB.PCI0.GP23._PRW], AE_ALREADY_EXISTS (20250404/dswload2-326)
+  [    0.224488] ACPI BIOS Error (bug): Failure creating named object [\_SB.PCI0.GP23._DSW], AE_ALREADY_EXISTS (20250404/dswload2-326)
+  [    0.224499] ACPI BIOS Error (bug): Failure creating named object [\_SB.PCI0.GP23.NCRD._S0W], AE_ALREADY_EXISTS (20250404/dswload2-326)
+  [    0.253924] ACPI: \_SB_.PCI0.GP23.PWSR: New power resource
+
+  ---
+
+  Kernel Parameter (Limited effect on APUs):
+    There's amdgpu.umafbsize=4096 but:
+    - Not officially supported/documented
+    - May not work on newer APUs
+    - BIOS typically overrides this
+
+
+      4. Watch GPU memory in real-time:
+  watch -n 1 'cat /sys/class/drm/card*/device/mem_info_vram_used'
+  watch -n 1 'cat /sys/kernel/debug/dri/0/amdgpu_gtt_mm'
+
+
+  Xlib:  extension "NV-GLX" missing on display ":0".
+
+  microcode: No sha256 digest for patch ID: 0xb204037
+  This suggests either missing/corrupted microcode files or a kernel/distribution issue with AMD microcode verification.
+
+
+  4. ACPI BIOS Errors
+  Multiple ACPI errors related to VGA device resolution and duplicate GP23 objects suggest BIOS bugs.
+
+  warning: `grep' uses wireless extensions which will stop working for Wi-Fi 7 hardware; use nl80211
+
+
+  Key Problems Identified
+
+   1. KWin DRM Permission Errors (repeated constantly):
+   kwin_wayland_drm: drmModeListLessees() failed: Permission denied
+   kwin_core: Applying output config failed!
+   2. Abnormal GPU VRAM Usage: 140.26% (same issue from your previous crashes)
+     - This is the GPU memory management bug mentioned in investigation_summary.md:289
+   3. System Tray Widget Crashes:
+   TypeError: Cannot read property 'toolTipMainText' of null
+   4. Wayland/X11 Connection Breaks: Multiple connection failures
+
+   The stuck panel is likely caused by the KWin compositor failing to update the display due to AMD GPU DRM permission errors combined with the GPU memory issue.
+
+   Recommended Actions
+
+   Option 1: Restart Plasmashell (Quick Fix)
+   killall plasmashell && kstart5 plasmashell
+
+   Option 2: Check if this is a GPU driver issue
+   Let me check the GPU memory state:
